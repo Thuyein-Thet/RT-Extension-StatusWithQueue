@@ -1,0 +1,85 @@
+<& /Elements/Header, Title => loc('Modify ticket #[_1]: [_2]', $TicketObj->Id, $TicketObj->Subject) &>
+<& /Elements/Tabs &>
+
+% $m->callback(CallbackName => 'BeforeActionList', Actions => \@results, ARGSRef => \%ARGS, Ticket => $TicketObj);
+
+<& /Elements/ListActions, actions => \@results &>
+<form method="post" action="Modify.html" enctype="multipart/form-data" name="TicketModify" id="TicketModify">
+% $m->callback( CallbackName => 'FormStart', ARGSRef => \%ARGS );
+<input type="hidden" class="hidden" name="id" value="<% $TicketObj->Id %>" />
+
+<&| /Widgets/TitleBox, title => loc('Modify ticket #[_1]',$TicketObj->Id), class=>'ticket-info-basics' &>
+% if ($TicketObj->Status ne 'Closed') {
+    <div>
+    <& Elements/EditBasics, TicketObj => $TicketObj, defaults => \%ARGS, InTable => 1 &>
+    <& /Elements/EditCustomFields, %ARGS, Object => $TicketObj, Grouping => 'Basics', InTable => 1 &>
+    </div>
+% }
+</&>
+
+% $m->callback( CallbackName => 'AfterBasics', Ticket => $TicketObj );
+
+<& /Elements/EditCustomFieldCustomGroupings, %ARGS, Object => $TicketObj, AsTable => !!RT->Config->Get('EditCustomFieldsSingleColumn', $session{'CurrentUser'}) &>
+
+  <div class="form-row">
+    <div class="col-12">
+      <& /Elements/Submit, Name => 'SubmitTicket', Label => loc('Save Changes'), Caption => loc("If you've updated anything above, be sure to"), color => "#993333" &>
+    </div>
+  </div>
+</form>
+
+% $m->callback(CallbackName => 'AfterForm', ARGSRef => \%ARGS, Ticket => $TicketObj);
+<%INIT>
+
+my $TicketObj = LoadTicket($id);
+my $CustomFields = $TicketObj->CustomFields;
+
+my @results;
+my $skip_update = 0;
+
+# Now let callbacks have a chance at editing %ARGS
+$m->callback( TicketObj => $TicketObj, CustomFields => $CustomFields, ARGSRef => \%ARGS, skip_update => \$skip_update, results => \@results );
+
+{
+    my ($status, @msg) = $m->comp(
+        '/Elements/ValidateCustomFields',
+        Object       => $TicketObj,
+        CustomFields => $CustomFields,
+        ARGSRef      => \%ARGS,
+    );
+    unless ($status) {
+        push @results, @msg;
+        $skip_update = 1;
+    }
+}
+
+unless ($skip_update) {
+    $TicketObj->Atomic(sub{
+        push @results, ProcessTicketBasics(TicketObj => $TicketObj, ARGSRef => \%ARGS);
+        push @results, ProcessTicketWatchers(TicketObj => $TicketObj, ARGSRef => \%ARGS);
+        push @results, ProcessObjectCustomFieldUpdates(Object => $TicketObj, ARGSRef => \%ARGS);
+        $m->callback( CallbackName => 'ProcessUpdates', TicketObj => $TicketObj,
+                      ARGSRef => \%ARGS, Results => \@results );
+    });
+
+    MaybeRedirectForResults(
+        Actions   => \@results,
+        Path      => "/Ticket/Modify.html",
+        Arguments => { id => $TicketObj->id },
+    );
+}
+
+unless ($TicketObj->CurrentUserHasRight('ShowTicket')) {
+    if (@results) {
+        Abort("A change was applied successfully, but you no longer have permissions to view the ticket", Actions => \@results);
+    } else {
+        Abort("No permission to view ticket");
+    }
+}
+
+$TicketObj->CurrentUser->AddRecentlyViewedTicket($TicketObj);
+
+</%INIT>
+<%ARGS>
+$id => undef
+</%ARGS>
